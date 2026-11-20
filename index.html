@@ -61,7 +61,14 @@
 
   /* ---------- Ajustes ---------- */
   #settings{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-radius:18px 18px 0 0;
-    padding:18px 20px calc(env(safe-area-inset-bottom) + 20px);box-shadow:0 -10px 30px rgba(0,0,0,.5);z-index:10}
+    padding:18px 20px calc(env(safe-area-inset-bottom) + 20px);box-shadow:0 -10px 30px rgba(0,0,0,.5);z-index:10;
+    max-height:88vh;overflow-y:auto;-webkit-overflow-scrolling:touch}
+  #settings input[type=password],#settings input[type=text]{width:100%;background:var(--bg);border:1px solid var(--line);
+    border-radius:10px;padding:10px;font-size:16px}
+  .btn2{width:100%;margin-top:10px;padding:12px;border-radius:10px;background:var(--bg);border:1px solid var(--line)}
+  #usage{color:var(--text);font-size:14px;margin-top:6px}
+  #toast{position:fixed;left:16px;right:16px;top:calc(env(safe-area-inset-top) + 60px);background:#5a2a22;color:#fff;
+    padding:12px 14px;border-radius:12px;font-size:14px;line-height:1.4;z-index:20}
   #settings h2{margin:0 0 14px;font-size:18px;display:flex;justify-content:space-between}
   #settings label{display:block;color:var(--muted);font-size:14px;margin:14px 0 6px}
   #settings select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px}
@@ -101,15 +108,34 @@
 
 <section id="settings" class="hidden">
   <h2>Ajustes <button id="closeSet">✕</button></h2>
-  <label>Voz</label>
-  <select id="voiceSel"></select>
-  <div class="chk"><input type="checkbox" id="allVoices"><span>Mostrar voces de todos los idiomas</span></div>
+  <label>Motor de voz</label>
+  <select id="engineSel">
+    <option value="google">Google (voz natural, en la nube)</option>
+    <option value="iphone">iPhone (sin internet)</option>
+  </select>
+
+  <div id="googleBox">
+    <label>Clave de API de Google</label>
+    <input type="password" id="apiKey" placeholder="Pega aquí tu clave (AIza…)" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <label>Voz de Google</label>
+    <select id="gVoiceSel"></select>
+    <div id="usage"></div>
+    <button class="btn2" id="dlBtn">⬇︎ Descargar audio de este capítulo (para escuchar sin datos)</button>
+    <p class="hint">La clave se guarda solo en este iPhone. El audio que ya escuchaste o descargaste se guarda y no vuelve a gastar caracteres ni datos.</p>
+  </div>
+
+  <div id="iphoneBox">
+    <label>Voz del iPhone</label>
+    <select id="voiceSel"></select>
+    <div class="chk"><input type="checkbox" id="allVoices"><span>Mostrar voces de todos los idiomas</span></div>
+  </div>
+
   <label class="row"><span>Velocidad</span><span id="rateVal"></span></label>
   <input type="range" id="rate" min="0.6" max="2" step="0.05">
   <label class="row"><span>Tamaño de letra</span><span id="fontVal"></span></label>
   <input type="range" id="font" min="15" max="30" step="1">
-  <p class="hint">Para voces más naturales: Ajustes del iPhone → Accesibilidad → Contenido leído → Voces → Español, y descarga una voz “Mejorada” o “Premium”. Luego cierra y vuelve a abrir esta app.</p>
 </section>
+<div id="toast" class="hidden"></div>
 
 <script>
 "use strict";
@@ -121,16 +147,20 @@ const LS = {
   set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch{} }
 };
 const dbP = new Promise((res, rej) => {
-  const r = indexedDB.open("lector-epub", 1);
-  r.onupgradeneeded = () => r.result.createObjectStore("books", { keyPath: "id" });
+  const r = indexedDB.open("lector-epub", 2);
+  r.onupgradeneeded = () => {
+    const db = r.result;
+    if (!db.objectStoreNames.contains("books")) db.createObjectStore("books", { keyPath: "id" });
+    if (!db.objectStoreNames.contains("audio")) db.createObjectStore("audio");
+  };
   r.onsuccess = () => res(r.result);
   r.onerror = () => rej(r.error);
 });
-async function idb(mode, fn){
+async function idb(mode, fn, store = "books"){
   const db = await dbP;
   return new Promise((res, rej) => {
-    const t = db.transaction("books", mode);
-    const req = fn(t.objectStore("books"));
+    const t = db.transaction(store, mode);
+    const req = fn(t.objectStore(store));
     t.oncomplete = () => res(req && req.result);
     t.onerror = () => rej(t.error);
   });
@@ -319,6 +349,7 @@ function renderLibrary(){
     li.querySelector(".del").onclick = async () => {
       if (!confirm("¿Borrar “" + b.title + "” de este teléfono?")) return;
       await idb("readwrite", s => s.delete(b.id));
+      await idb("readwrite", s => s.delete(IDBKeyRange.bound(b.id + "|", b.id + "|￿")), "audio");
       localStorage.removeItem("prog:" + b.id);
       library = library.filter(x => x.id !== b.id); saveLibrary(); renderLibrary();
     };
@@ -412,26 +443,265 @@ function highlight(scroll){
 
 $("inner").onclick = e => {
   const el = e.target.closest(".s"); if (!el) return;
-  si = +el.dataset.i; highlight(false);
-  if (playing) speakCurrent();
+  si = +el.dataset.i; highlight(false); jumped();
 };
 $("chapterSel").onchange = e => {
-  ch = +e.target.value; si = 0; renderChapter(); highlight(true);
-  if (playing) speakCurrent();
+  ch = +e.target.value; si = 0; renderChapter(); highlight(true); jumped();
 };
 $("backBtn").onclick = () => {
-  pause(); book = null;
+  pause(); book = null; curChunk = null;
   $("reader").classList.add("hidden"); $("library").classList.remove("hidden"); renderLibrary();
 };
 
-/* ================= Voz ================= */
+/* ================= Voz: general ================= */
 const synth = window.speechSynthesis;
-let settings = Object.assign({ voice: "", rate: 1, font: 19, all: false }, LS.get("settings", {}));
-let voices = [], playing = false, current = null, wakeLock = null;
+let settings = Object.assign({ engine: "google", key: "", gVoice: "es-US-Chirp3-HD-Algenib",
+  voice: "", rate: 1, font: 19, all: false }, LS.get("settings", {}));
+let voices = [], playing = false, current = null, wakeLock = null, resumeOk = false;
 
+function toast(msg){
+  const t = $("toast"); t.textContent = msg; t.classList.remove("hidden");
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.add("hidden"), 7000);
+}
+$("toast").onclick = () => $("toast").classList.add("hidden");
+
+function setPlayUI(on){
+  $("playBtn").textContent = on ? "⏸" : "▶";
+  $("playBtn").setAttribute("aria-label", on ? "Pausa" : "Reproducir");
+}
+async function keepAwake(){
+  try{
+    if ("wakeLock" in navigator && !wakeLock){
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", () => { wakeLock = null; });
+    }
+  }catch{}
+}
+function play(){
+  if (!book) return;
+  playing = true; setPlayUI(true);
+  if (settings.engine === "google"){
+    if (resumeOk && curChunk && audio.src === curUrl && !audio.ended){ audio.play().catch(() => gStart()); }
+    else {
+      audio.src = SILENCE; audio.play().catch(() => {});   // desbloquea el audio en iOS (requiere el toque)
+      gStart();
+    }
+  } else { speakCurrent(); keepAwake(); }
+  updateMedia();
+}
+function pause(){
+  playing = false; token++; current = null;
+  synth.cancel(); audio.pause();
+  resumeOk = settings.engine === "google";
+  setPlayUI(false);
+  if (wakeLock){ wakeLock.release().catch(() => {}); wakeLock = null; }
+}
+function jumped(){
+  resumeOk = false;
+  if (!playing) return;
+  if (settings.engine === "google") gStart(); else speakCurrent();
+}
+$("playBtn").onclick = () => playing ? pause() : play();
+$("prevBtn").onclick = () => {
+  if (!book) return;
+  if (si > 0) si--;
+  else if (ch > 0){ ch--; renderChapter(); si = book.chapters[ch].sentences.length - 1; }
+  highlight(true); jumped();
+};
+$("nextBtn").onclick = () => {
+  if (!book) return;
+  if (si < book.chapters[ch].sentences.length - 1) si++;
+  else if (ch < book.chapters.length - 1){ ch++; si = 0; renderChapter(); }
+  highlight(true); jumped();
+};
+
+/* Controles en la pantalla bloqueada y el Centro de control */
+function updateMedia(){
+  if (!("mediaSession" in navigator) || !book) return;
+  try{ navigator.mediaSession.metadata = new MediaMetadata({
+    title: book.chapters[ch].title, artist: meta.title, album: meta.author || "" }); }catch{}
+}
+if ("mediaSession" in navigator){
+  const h = (a, f) => { try{ navigator.mediaSession.setActionHandler(a, f); }catch{} };
+  h("play", () => { if (!playing) play(); });
+  h("pause", () => { if (playing) pause(); });
+  h("nexttrack", () => $("nextBtn").click());
+  h("previoustrack", () => $("prevBtn").click());
+}
+
+/* ================= Voz: Google (nube) ================= */
+const audio = new Audio();
+audio.preload = "auto";
+const SILENCE = (() => {
+  const n = 800, b = new ArrayBuffer(44 + n * 2), v = new DataView(b);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); w(8, "WAVE"); w(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 8000, true); v.setUint32(28, 16000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, "data"); v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([b], { type: "audio/wav" }));
+})();
+let token = 0, curChunk = null, curUrl = null;
+const inflight = new Map();
+
+// Agrupa frases en bloques de ~1200 caracteres (menos pausas y menos peticiones)
+function chunksOf(chIdx){
+  const c = book.chapters[chIdx];
+  if (c._chunks) return c._chunks;
+  const out = []; let start = 0, len = 0;
+  c.sentences.forEach((s, i) => {
+    if (i > start && len + s.t.length > 1200){ out.push({ start, end: i }); start = i; len = 0; }
+    len += s.t.length + 1;
+  });
+  out.push({ start, end: c.sentences.length });
+  return (c._chunks = out);
+}
+function chunkAt(chIdx, i){ return chunksOf(chIdx).find(k => i >= k.start && i < k.end) || chunksOf(chIdx)[0]; }
+function following(chIdx, end){
+  const nx = chunksOf(chIdx).find(k => k.start >= end);
+  if (nx) return [chIdx, nx];
+  if (chIdx + 1 < book.chapters.length) return [chIdx + 1, chunksOf(chIdx + 1)[0]];
+  return null;
+}
+const chunkText = (chIdx, c) => book.chapters[chIdx].sentences.slice(c.start, c.end).map(s => s.t).join(" ");
+const audioKey = (chIdx, c) => `${meta.id}|${settings.gVoice}|${chIdx}|${c.start}-${c.end}`;
+
+function monthKey(){ const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); }
+function usedThisMonth(){ const u = LS.get("usage", null); return u && u.m === monthKey() ? u.n : 0; }
+function addUsage(n){ LS.set("usage", { m: monthKey(), n: usedThisMonth() + n }); showUsage(); }
+function showUsage(){
+  $("usage").textContent = `Este mes llevas ${usedThisMonth().toLocaleString("es-MX")} de 1,000,000 caracteres gratis.`;
+}
+
+async function synthesize(text){
+  if (!settings.key) throw new Error("Falta tu clave de API de Google. Ponla en ⚙︎ Ajustes.");
+  const lang = settings.gVoice.split("-").slice(0, 2).join("-");
+  const r = await fetch("https://texttospeech.googleapis.com/v1/text:synthesize?key=" + encodeURIComponent(settings.key), {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ input: { text }, voice: { languageCode: lang, name: settings.gVoice },
+      audioConfig: { audioEncoding: "MP3" } })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && j.error.message) || ("Error " + r.status));
+  addUsage(text.length);
+  const bin = atob(j.audioContent), u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8.buffer;
+}
+// Devuelve el audio del bloque: primero lo busca guardado en el iPhone; si no, lo pide a Google y lo guarda
+function getAudio(chIdx, c){
+  const k = audioKey(chIdx, c);
+  if (inflight.has(k)) return inflight.get(k);
+  const text = chunkText(chIdx, c);
+  const p = (async () => {
+    const hit = await idb("readonly", s => s.get(k), "audio");
+    if (hit) return hit;
+    const buf = await synthesize(text);
+    await idb("readwrite", s => s.put(buf, k), "audio");
+    return buf;
+  })();
+  inflight.set(k, p);
+  p.then(() => inflight.delete(k), () => inflight.delete(k));
+  return p;
+}
+function prefetch(chIdx, c){
+  let a = [chIdx, c];
+  for (let n = 0; n < 2; n++){
+    a = following(a[0], a[1].end); if (!a) break;
+    getAudio(a[0], a[1]).catch(() => {});
+  }
+}
+function waitMeta(){
+  return new Promise(res => {
+    if (audio.readyState >= 1) return res();
+    const done = () => { audio.removeEventListener("loadedmetadata", done); res(); };
+    audio.addEventListener("loadedmetadata", done); setTimeout(done, 4000);
+  });
+}
+
+async function gStart(){
+  const my = ++token, chIdx = ch, c = chunkAt(ch, si), from = si;
+  resumeOk = false; curChunk = null;
+  highlight(true);
+  let buf;
+  try{ buf = await getAudio(chIdx, c); }
+  catch(e){ if (my === token){ toast("No se pudo generar la voz: " + e.message); pause(); resumeOk = false; } return; }
+  if (my !== token || !playing) return;
+
+  const sent = book.chapters[chIdx].sentences.slice(c.start, c.end);
+  const cum = [0]; sent.forEach(s => cum.push(cum[cum.length - 1] + s.t.length + 1));
+  if (curUrl) URL.revokeObjectURL(curUrl);
+  curUrl = URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" }));
+  audio.src = curUrl;
+  audio.defaultPlaybackRate = audio.playbackRate = settings.rate;
+  curChunk = { chIdx, start: c.start, end: c.end, cum, total: cum[cum.length - 1] };
+
+  if (from > c.start){             // empezar a media sección: salta al punto aproximado
+    await waitMeta();
+    if (my !== token) return;
+    if (isFinite(audio.duration))
+      audio.currentTime = Math.max(0, audio.duration * cum[from - c.start] / curChunk.total - 0.3);
+  }
+  try{ await audio.play(); audio.playbackRate = settings.rate; }
+  catch(e){ if (my === token){ pause(); resumeOk = false; toast("Toca ▶ para continuar."); } return; }
+  updateMedia();
+  prefetch(chIdx, c);
+}
+
+audio.ontimeupdate = () => {
+  if (!curChunk || !playing || curChunk.chIdx !== ch || !isFinite(audio.duration) || !audio.duration) return;
+  const target = audio.currentTime / audio.duration * curChunk.total;
+  let i = curChunk.start;
+  while (i < curChunk.end - 1 && curChunk.cum[i - curChunk.start + 1] <= target) i++;
+  if (i !== si){ si = i; highlight(true); }
+};
+audio.onended = () => {
+  if (!playing || !curChunk || audio.src !== curUrl) return;
+  const nx = following(curChunk.chIdx, curChunk.end);
+  if (!nx){ pause(); resumeOk = false; toast("Fin del libro."); return; }
+  if (nx[0] !== ch){ ch = nx[0]; renderChapter(); }
+  si = nx[1].start;
+  gStart();
+};
+
+const DL_LABEL = "⬇︎ Descargar audio de este capítulo (para escuchar sin datos)";
+$("dlBtn").onclick = async () => {
+  if (!book){ toast("Abre un libro primero."); return; }
+  const chIdx = ch, cs = chunksOf(chIdx);
+  const chars = cs.reduce((n, c) => n + chunkText(chIdx, c).length, 0);
+  if (!confirm(`Este capítulo usa unos ${chars.toLocaleString("es-MX")} caracteres. ¿Descargarlo?`)) return;
+  const b = $("dlBtn"); b.disabled = true;
+  try{
+    for (let i = 0; i < cs.length; i++){ b.textContent = `Descargando… ${i + 1} de ${cs.length}`; await getAudio(chIdx, cs[i]); }
+    b.textContent = "✓ Capítulo descargado";
+  }catch(e){ toast("Error al descargar: " + e.message); b.textContent = DL_LABEL; }
+  b.disabled = false; setTimeout(() => { b.textContent = DL_LABEL; }, 3000);
+};
+
+let gVoicesLoaded = false;
+async function loadGVoices(force){
+  const sel = $("gVoiceSel");
+  const label = n => n.replace(/^es-(\w+)-/, "$1 · ").replace("Chirp3-HD-", "Chirp 3 HD · ").replace(/-/g, " ");
+  const fill = list => {
+    if (!list.includes(settings.gVoice)) list.unshift(settings.gVoice);
+    sel.innerHTML = "";
+    for (const n of list){ const o = document.createElement("option"); o.value = n; o.textContent = label(n); sel.appendChild(o); }
+    sel.value = settings.gVoice;
+  };
+  if (!gVoicesLoaded) fill([]);
+  if (!settings.key || (gVoicesLoaded && !force)) return;
+  try{
+    const r = await fetch("https://texttospeech.googleapis.com/v1/voices?languageCode=es&key=" + encodeURIComponent(settings.key));
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((j.error && j.error.message) || ("Error " + r.status));
+    const names = (j.voices || []).map(v => v.name).filter(n => /Chirp3-HD|Neural2|Wavenet/.test(n)).sort();
+    if (names.length){ fill(names); gVoicesLoaded = true; }
+  }catch(e){ toast("No pude conectar con Google: " + e.message); }
+}
+
+/* ================= Voz: iPhone (sin internet) ================= */
 function voiceScore(v){
-  const n = v.name.toLowerCase();
-  let s = 0;
+  const n = v.name.toLowerCase(); let s = 0;
   if (/premium/.test(n)) s += 3;
   if (/mejorad|enhanced/.test(n)) s += 2;
   if (/es-mx|es-us|es-419/i.test(v.lang)) s += 1;
@@ -439,13 +709,11 @@ function voiceScore(v){
 }
 function loadVoices(){
   voices = synth.getVoices();
-  const list = voices
-    .filter(v => settings.all || v.lang.toLowerCase().startsWith("es"))
+  const list = voices.filter(v => settings.all || v.lang.toLowerCase().startsWith("es"))
     .sort((a, b) => voiceScore(b) - voiceScore(a) || a.name.localeCompare(b.name));
   const sel = $("voiceSel"); sel.innerHTML = "";
   for (const v of list){
-    const o = document.createElement("option");
-    o.value = v.voiceURI; o.textContent = `${v.name} (${v.lang})`; sel.appendChild(o);
+    const o = document.createElement("option"); o.value = v.voiceURI; o.textContent = `${v.name} (${v.lang})`; sel.appendChild(o);
   }
   if (!list.length){ sel.innerHTML = "<option>Cargando voces…</option>"; return; }
   if (!list.some(v => v.voiceURI === settings.voice)) settings.voice = list[0].voiceURI;
@@ -453,87 +721,59 @@ function loadVoices(){
 }
 loadVoices();
 if (synth.addEventListener) synth.addEventListener("voiceschanged", loadVoices);
-else synth.onvoiceschanged = loadVoices;
 setTimeout(loadVoices, 800);
-
-function currentVoice(){ return voices.find(v => v.voiceURI === settings.voice) || null; }
 
 function speakCurrent(){
   current = null; synth.cancel();
   const s = book && book.chapters[ch].sentences[si];
   if (!s){ pause(); return; }
   const u = new SpeechSynthesisUtterance(s.t);
-  const v = currentVoice();
+  const v = voices.find(v => v.voiceURI === settings.voice);
   if (v){ u.voice = v; u.lang = v.lang; } else u.lang = "es-MX";
   u.rate = settings.rate;
-  u.onend = () => { if (u === current && playing) advance(); };
+  u.onend = () => { if (u === current && playing) iAdvance(); };
   u.onerror = e => {
-    if (u !== current || !playing) return;
-    if (e.error === "interrupted" || e.error === "canceled") return;
-    advance();
+    if (u !== current || !playing || e.error === "interrupted" || e.error === "canceled") return;
+    iAdvance();
   };
-  current = u;
-  synth.speak(u);
-  highlight(true);
+  current = u; synth.speak(u); highlight(true);
 }
-
-function advance(){
+function iAdvance(){
   si++;
   if (si >= book.chapters[ch].sentences.length){
     if (ch + 1 >= book.chapters.length){ si--; pause(); highlight(false); return; }
-    ch++; si = 0; renderChapter();
+    ch++; si = 0; renderChapter(); updateMedia();
   }
   speakCurrent();
 }
-
-async function keepAwake(){
-  try{ if ("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen");
-       if (wakeLock) wakeLock.addEventListener("release", () => { wakeLock = null; }); }catch{}
-}
-function play(){
-  playing = true; $("playBtn").textContent = "⏸"; $("playBtn").setAttribute("aria-label", "Pausa");
-  speakCurrent(); keepAwake();
-}
-function pause(){
-  playing = false; current = null; synth.cancel();
-  $("playBtn").textContent = "▶"; $("playBtn").setAttribute("aria-label", "Reproducir");
-  if (wakeLock){ wakeLock.release().catch(()=>{}); wakeLock = null; }
-}
-$("playBtn").onclick = () => playing ? pause() : play();
-$("prevBtn").onclick = () => {
-  if (si > 0) si--;
-  else if (ch > 0){ ch--; renderChapter(); si = book.chapters[ch].sentences.length - 1; }
-  highlight(true); if (playing) speakCurrent();
-};
-$("nextBtn").onclick = () => {
-  if (si < book.chapters[ch].sentences.length - 1) si++;
-  else if (ch < book.chapters.length - 1){ ch++; si = 0; renderChapter(); }
-  highlight(true); if (playing) speakCurrent();
-};
-
-// Al volver a la app (p. ej. tras bloquear la pantalla) retoma la lectura
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && playing){
-    keepAwake();
-    if (!synth.speaking) speakCurrent();
+  if (document.visibilityState === "visible" && playing && settings.engine === "iphone"){
+    keepAwake(); if (!synth.speaking) speakCurrent();
   }
 });
 
 /* ================= Ajustes ================= */
 function applySettings(){
   document.documentElement.style.setProperty("--font", settings.font + "px");
+  $("engineSel").value = settings.engine;
+  $("googleBox").classList.toggle("hidden", settings.engine !== "google");
+  $("iphoneBox").classList.toggle("hidden", settings.engine !== "iphone");
   $("rate").value = settings.rate; $("rateVal").textContent = (+settings.rate).toFixed(2) + "×";
   $("font").value = settings.font; $("fontVal").textContent = settings.font + " px";
   $("allVoices").checked = settings.all;
   LS.set("settings", settings);
 }
 applySettings();
-$("setBtn").onclick = () => { loadVoices(); $("settings").classList.remove("hidden"); };
+$("apiKey").value = settings.key;
+$("setBtn").onclick = () => { showUsage(); loadVoices(); loadGVoices(); $("settings").classList.remove("hidden"); };
 $("closeSet").onclick = () => $("settings").classList.add("hidden");
+$("engineSel").onchange = e => { if (playing) pause(); resumeOk = false; settings.engine = e.target.value; applySettings(); };
+$("apiKey").onchange = e => { settings.key = e.target.value.trim(); applySettings(); loadGVoices(true); };
+$("gVoiceSel").onchange = e => { settings.gVoice = e.target.value; applySettings(); resumeOk = false; if (playing) gStart(); };
 $("voiceSel").onchange = e => { settings.voice = e.target.value; applySettings(); if (playing) speakCurrent(); };
 $("allVoices").onchange = e => { settings.all = e.target.checked; applySettings(); loadVoices(); };
-$("rate").oninput = e => { settings.rate = +e.target.value; applySettings(); };
-$("rate").onchange = () => { if (playing) speakCurrent(); };
+$("rate").oninput = e => { settings.rate = +e.target.value; audio.playbackRate = settings.rate; applySettings(); };
+$("rate").onchange = () => { if (playing && settings.engine === "iphone") speakCurrent(); };
 $("font").oninput = e => { settings.font = +e.target.value; applySettings(); };
 
 renderLibrary();
