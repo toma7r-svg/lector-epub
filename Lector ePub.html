@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Lector">
+<meta name="theme-color" content="#1c1a17">
+<title>Lector EPUB</title>
+<style>
+  :root{
+    --bg:#1c1a17; --panel:#26231f; --line:#3a3530; --text:#ece4d8; --muted:#a59a8a;
+    --accent:#e0a458; --hl:rgba(224,164,88,.28); --font:19px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif}
+  button,select,input{font:inherit;color:inherit}
+  button{background:none;border:0;cursor:pointer}
+  .hidden{display:none!important}
+
+  /* ---------- Biblioteca ---------- */
+  #library{padding:calc(env(safe-area-inset-top) + 20px) 18px 40px;max-width:700px;margin:0 auto}
+  #library h1{font-family:Georgia,serif;font-weight:normal;font-size:30px;margin:6px 0 4px}
+  #library .sub{color:var(--muted);margin:0 0 22px;font-size:15px}
+  .add{display:block;width:100%;padding:16px;border-radius:14px;background:var(--accent);
+    color:#1c1a17;font-weight:600;text-align:center;font-size:17px}
+  #bookList{list-style:none;padding:0;margin:22px 0 0}
+  #bookList li{display:flex;align-items:center;gap:12px;padding:14px;border-radius:14px;
+    background:var(--panel);margin-bottom:10px}
+  #bookList .info{flex:1;min-width:0}
+  #bookList .t{font-family:Georgia,serif;font-size:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #bookList .a{color:var(--muted);font-size:14px;margin-top:2px}
+  .bar{height:4px;background:var(--line);border-radius:2px;margin-top:8px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--accent)}
+  .del{color:var(--muted);font-size:22px;padding:6px 8px}
+  .empty{color:var(--muted);text-align:center;margin-top:40px;line-height:1.5}
+  #status{color:var(--muted);text-align:center;margin-top:14px;min-height:20px;font-size:15px}
+
+  /* ---------- Lector ---------- */
+  #reader{position:fixed;inset:0;display:flex;flex-direction:column}
+  header{display:flex;align-items:center;gap:8px;padding:calc(env(safe-area-inset-top) + 6px) 10px 8px;
+    background:var(--bg);border-bottom:1px solid var(--line)}
+  header .back{font-size:26px;padding:4px 10px}
+  #chapterSel{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:8px 10px;font-size:15px;-webkit-appearance:none;appearance:none}
+  #text{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:22px 22px 140px;
+    font-family:Georgia,"Iowan Old Style",serif;font-size:var(--font);line-height:1.65}
+  #text .inner{max-width:680px;margin:0 auto}
+  #text p{margin:0 0 1em}
+  #text .s{border-radius:4px;transition:background .15s}
+  #text .s.on{background:var(--hl)}
+  footer{position:fixed;left:0;right:0;bottom:0;background:rgba(28,26,23,.96);
+    border-top:1px solid var(--line);padding:10px 14px calc(env(safe-area-inset-bottom) + 10px)}
+  .controls{display:flex;align-items:center;justify-content:center;gap:22px}
+  .controls button{width:52px;height:52px;border-radius:50%;font-size:22px;display:flex;align-items:center;justify-content:center}
+  #playBtn{width:68px;height:68px;background:var(--accent);color:#1c1a17;font-size:28px}
+  #pct{text-align:center;color:var(--muted);font-size:13px;margin-bottom:6px}
+
+  /* ---------- Ajustes ---------- */
+  #settings{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-radius:18px 18px 0 0;
+    padding:18px 20px calc(env(safe-area-inset-bottom) + 20px);box-shadow:0 -10px 30px rgba(0,0,0,.5);z-index:10}
+  #settings h2{margin:0 0 14px;font-size:18px;display:flex;justify-content:space-between}
+  #settings label{display:block;color:var(--muted);font-size:14px;margin:14px 0 6px}
+  #settings select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px}
+  #settings input[type=range]{width:100%;accent-color:var(--accent)}
+  .row{display:flex;justify-content:space-between;align-items:center}
+  .chk{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:14px;margin-top:8px}
+  .hint{color:var(--muted);font-size:13px;line-height:1.4;margin-top:14px}
+</style>
+</head>
+<body>
+
+<section id="library">
+  <h1>Mis libros</h1>
+  <p class="sub">Abre un EPUB y te lo leo en voz alta.</p>
+  <button class="add" id="addBtn">＋ Agregar libro EPUB</button>
+  <input type="file" id="fileInput" class="hidden">
+  <div id="status"></div>
+  <ul id="bookList"></ul>
+</section>
+
+<section id="reader" class="hidden">
+  <header>
+    <button class="back" id="backBtn" aria-label="Biblioteca">‹</button>
+    <select id="chapterSel"></select>
+    <button class="back" id="setBtn" aria-label="Ajustes">⚙︎</button>
+  </header>
+  <div id="text"><div class="inner" id="inner"></div></div>
+  <footer>
+    <div id="pct"></div>
+    <div class="controls">
+      <button id="prevBtn" aria-label="Frase anterior">⏮</button>
+      <button id="playBtn" aria-label="Reproducir">▶</button>
+      <button id="nextBtn" aria-label="Frase siguiente">⏭</button>
+    </div>
+  </footer>
+</section>
+
+<section id="settings" class="hidden">
+  <h2>Ajustes <button id="closeSet">✕</button></h2>
+  <label>Voz</label>
+  <select id="voiceSel"></select>
+  <div class="chk"><input type="checkbox" id="allVoices"><span>Mostrar voces de todos los idiomas</span></div>
+  <label class="row"><span>Velocidad</span><span id="rateVal"></span></label>
+  <input type="range" id="rate" min="0.6" max="2" step="0.05">
+  <label class="row"><span>Tamaño de letra</span><span id="fontVal"></span></label>
+  <input type="range" id="font" min="15" max="30" step="1">
+  <p class="hint">Para voces más naturales: Ajustes del iPhone → Accesibilidad → Contenido leído → Voces → Español, y descarga una voz “Mejorada” o “Premium”. Luego cierra y vuelve a abrir esta app.</p>
+</section>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+
+/* ================= Almacenamiento ================= */
+const LS = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); }catch{ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch{} }
+};
+const dbP = new Promise((res, rej) => {
+  const r = indexedDB.open("lector-epub", 1);
+  r.onupgradeneeded = () => r.result.createObjectStore("books", { keyPath: "id" });
+  r.onsuccess = () => res(r.result);
+  r.onerror = () => rej(r.error);
+});
+async function idb(mode, fn){
+  const db = await dbP;
+  return new Promise((res, rej) => {
+    const t = db.transaction("books", mode);
+    const req = fn(t.objectStore("books"));
+    t.oncomplete = () => res(req && req.result);
+    t.onerror = () => rej(t.error);
+  });
+}
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{});
+
+/* ================= Lector ZIP mínimo ================= */
+async function unzip(buf){
+  const dv = new DataView(buf), dec = new TextDecoder();
+  let eocd = -1;
+  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 65557); i--)
+    if (dv.getUint32(i, true) === 0x06054b50){ eocd = i; break; }
+  if (eocd < 0) throw new Error("El archivo no parece ser un EPUB.");
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const files = new Map(), lower = new Map();
+  for (let n = 0; n < count; n++){
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true),
+          nlen = dv.getUint16(p + 28, true), elen = dv.getUint16(p + 30, true),
+          clen = dv.getUint16(p + 32, true), off = dv.getUint32(p + 42, true);
+    const name = dec.decode(new Uint8Array(buf, p + 46, nlen));
+    files.set(name, { method, csize, off }); lower.set(name.toLowerCase(), name);
+    p += 46 + nlen + elen + clen;
+  }
+  async function get(name){
+    let e = files.get(name);
+    if (!e){ const k = lower.get(name.toLowerCase()); if (k) e = files.get(k); }
+    if (!e) return null;
+    const ln = dv.getUint16(e.off + 26, true), le = dv.getUint16(e.off + 28, true);
+    const data = new Uint8Array(buf, e.off + 30 + ln + le, e.csize);
+    if (e.method === 0) return data;
+    const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+  return { get, async text(n){ const d = await get(n); return d ? dec.decode(d) : null; } };
+}
+
+/* ================= Análisis del EPUB ================= */
+function parseXML(str, type){
+  let doc = new DOMParser().parseFromString(str, type || "application/xhtml+xml");
+  if (doc.getElementsByTagName("parsererror").length)
+    doc = new DOMParser().parseFromString(str, "text/html");
+  return doc;
+}
+function resolvePath(base, href){
+  href = decodeURIComponent(href.split("#")[0]);
+  const parts = (base + href).split("/"), out = [];
+  for (const s of parts){ if (s === "..") out.pop(); else if (s && s !== ".") out.push(s); }
+  return out.join("/");
+}
+const byTag = (el, tag) => Array.from(el.getElementsByTagNameNS("*", tag));
+
+const BLOCK = new Set(["p","h1","h2","h3","h4","h5","h6","li","blockquote","div","section","article",
+  "pre","td","th","dt","dd","figcaption","tr","aside","header","footer","table","ul","ol","dl","figure","nav","main"]);
+function hasBlock(el){
+  for (const c of el.getElementsByTagName("*")) if (BLOCK.has(c.localName.toLowerCase())) return true;
+  return false;
+}
+function extractParagraphs(doc){
+  const out = [];
+  const root = doc.body || byTag(doc, "body")[0] || doc.documentElement;
+  (function walk(el){
+    let buf = "";
+    const flush = () => { const t = buf.replace(/\s+/g, " ").trim(); if (t) out.push(t); buf = ""; };
+    for (const c of el.childNodes){
+      if (c.nodeType === 3){ buf += c.textContent; continue; }
+      if (c.nodeType !== 1) continue;
+      const tag = c.localName.toLowerCase();
+      if (tag === "script" || tag === "style" || tag === "head") continue;
+      if (tag === "br"){ buf += " "; continue; }
+      if (BLOCK.has(tag) || hasBlock(c)){ flush(); walk(c); }
+      else buf += c.textContent;
+    }
+    flush();
+  })(root);
+  return out;
+}
+
+const segmenter = (typeof Intl !== "undefined" && Intl.Segmenter)
+  ? new Intl.Segmenter("es", { granularity: "sentence" }) : null;
+function splitSentences(par){
+  let parts = segmenter
+    ? Array.from(segmenter.segment(par), s => s.segment)
+    : (par.match(/[^.!?…]+[.!?…]+["»”’)\]]*\s*|[^.!?…]+$/g) || [par]);
+  const res = [];
+  for (let s of parts){
+    s = s.trim(); if (!s) continue;
+    // Frases muy largas se parten para que la voz del iPhone no se corte
+    while (s.length > 260){
+      let cut = -1;
+      for (const ch of [";", ":", ",", " "]){ cut = s.lastIndexOf(ch, 240); if (cut > 80) break; }
+      if (cut <= 0) cut = 240;
+      res.push(s.slice(0, cut + 1).trim()); s = s.slice(cut + 1).trim();
+    }
+    if (s) res.push(s);
+  }
+  return res;
+}
+
+async function parseEpub(buf){
+  const zip = await unzip(buf);
+  const container = await zip.text("META-INF/container.xml");
+  if (!container) throw new Error("Falta META-INF/container.xml: no es un EPUB válido.");
+  const rootfile = byTag(parseXML(container, "application/xml"), "rootfile")[0];
+  const opfPath = rootfile.getAttribute("full-path");
+  const opfDir = opfPath.includes("/") ? opfPath.slice(0, opfPath.lastIndexOf("/") + 1) : "";
+  const opf = parseXML(await zip.text(opfPath), "application/xml");
+
+  const title = (byTag(opf, "title")[0] || {}).textContent || "Sin título";
+  const author = (byTag(opf, "creator")[0] || {}).textContent || "";
+  const manifest = {};
+  let navHref = null, ncxHref = null;
+  for (const it of byTag(opf, "item")){
+    const id = it.getAttribute("id"), href = it.getAttribute("href");
+    manifest[id] = href;
+    if ((it.getAttribute("properties") || "").split(" ").includes("nav")) navHref = href;
+    if (it.getAttribute("media-type") === "application/x-dtbncx+xml") ncxHref = href;
+  }
+  const spineEl = byTag(opf, "spine")[0];
+  if (!ncxHref && spineEl && spineEl.getAttribute("toc")) ncxHref = manifest[spineEl.getAttribute("toc")];
+
+  // Títulos de capítulos desde el índice
+  const labels = {};
+  try{
+    if (navHref){
+      const navPath = resolvePath(opfDir, navHref);
+      const navDir = navPath.includes("/") ? navPath.slice(0, navPath.lastIndexOf("/") + 1) : "";
+      const nav = parseXML(await zip.text(navPath));
+      for (const a of byTag(nav, "a")){
+        const h = a.getAttribute("href"); if (!h) continue;
+        const k = resolvePath(navDir, h);
+        if (!labels[k]) labels[k] = a.textContent.replace(/\s+/g, " ").trim();
+      }
+    } else if (ncxHref){
+      const ncxPath = resolvePath(opfDir, ncxHref);
+      const ncxDir = ncxPath.includes("/") ? ncxPath.slice(0, ncxPath.lastIndexOf("/") + 1) : "";
+      const ncx = parseXML(await zip.text(ncxPath), "application/xml");
+      for (const np of byTag(ncx, "navPoint")){
+        const c = byTag(np, "content")[0], l = byTag(np, "text")[0];
+        if (!c || !l) continue;
+        const k = resolvePath(ncxDir, c.getAttribute("src"));
+        if (!labels[k]) labels[k] = l.textContent.trim();
+      }
+    }
+  }catch(e){ /* el índice es opcional */ }
+
+  const chapters = [];
+  for (const ref of byTag(opf, "itemref")){
+    const href = manifest[ref.getAttribute("idref")]; if (!href) continue;
+    const path = resolvePath(opfDir, href);
+    const html = await zip.text(path); if (!html) continue;
+    const paras = extractParagraphs(parseXML(html)).map(splitSentences).filter(p => p.length);
+    if (!paras.length) continue;
+    const sentences = [];
+    paras.forEach((p, pi) => p.forEach(t => sentences.push({ t, p: pi })));
+    chapters.push({
+      title: labels[path] || (paras[0][0].length < 70 ? paras[0][0] : "Capítulo " + (chapters.length + 1)),
+      sentences
+    });
+  }
+  if (!chapters.length) throw new Error("No encontré texto en este libro.");
+  return { title: title.trim(), author: author.trim(), chapters };
+}
+
+/* ================= Biblioteca ================= */
+let library = LS.get("library", []);
+function saveLibrary(){ LS.set("library", library); }
+
+function renderLibrary(){
+  const ul = $("bookList"); ul.innerHTML = "";
+  if (!library.length){
+    ul.innerHTML = '<li class="empty" style="background:none;display:block">Todavía no tienes libros.<br>Toca “Agregar libro EPUB”.</li>';
+    return;
+  }
+  library.sort((a, b) => (b.opened || b.added) - (a.opened || a.added));
+  for (const b of library){
+    const pr = LS.get("prog:" + b.id, null);
+    const pct = pr && b.total ? Math.min(100, Math.round(100 * pr.g / b.total)) : 0;
+    const li = document.createElement("li");
+    li.innerHTML = `<div class="info"><div class="t"></div><div class="a"></div>
+      <div class="bar"><i style="width:${pct}%"></i></div></div><button class="del" aria-label="Borrar">🗑</button>`;
+    li.querySelector(".t").textContent = b.title;
+    li.querySelector(".a").textContent = (b.author ? b.author + " · " : "") + pct + "%";
+    li.querySelector(".info").onclick = () => openBook(b.id);
+    li.querySelector(".del").onclick = async () => {
+      if (!confirm("¿Borrar “" + b.title + "” de este teléfono?")) return;
+      await idb("readwrite", s => s.delete(b.id));
+      localStorage.removeItem("prog:" + b.id);
+      library = library.filter(x => x.id !== b.id); saveLibrary(); renderLibrary();
+    };
+    ul.appendChild(li);
+  }
+}
+
+$("addBtn").onclick = () => $("fileInput").click();
+$("fileInput").onchange = async e => {
+  const file = e.target.files[0]; e.target.value = "";
+  if (!file) return;
+  $("status").textContent = "Abriendo libro…";
+  try{
+    const buf = await file.arrayBuffer();
+    const book = await parseEpub(buf);
+    const id = file.name + "-" + file.size;
+    const total = book.chapters.reduce((n, c) => n + c.sentences.length, 0);
+    await idb("readwrite", s => s.put({ id, data: buf }));
+    library = library.filter(x => x.id !== id);
+    library.push({ id, title: book.title, author: book.author, total, added: Date.now() });
+    saveLibrary();
+    $("status").textContent = "";
+    renderLibrary();
+    openBook(id, book);
+  }catch(err){
+    $("status").textContent = "No pude abrirlo: " + err.message;
+  }
+};
+
+/* ================= Lectura ================= */
+let book = null, meta = null, ch = 0, si = 0;
+let offsets = [];          // frases acumuladas antes de cada capítulo (para el %)
+
+async function openBook(id, parsed){
+  meta = library.find(b => b.id === id);
+  if (!meta) return;
+  try{
+    if (!parsed){
+      $("status").textContent = "Abriendo libro…";
+      const rec = await idb("readonly", s => s.get(id));
+      parsed = await parseEpub(rec.data);
+      $("status").textContent = "";
+    }
+  }catch(err){ $("status").textContent = "No pude abrirlo: " + err.message; return; }
+  book = parsed;
+  offsets = []; let n = 0;
+  for (const c of book.chapters){ offsets.push(n); n += c.sentences.length; }
+  meta.opened = Date.now(); saveLibrary();
+  const pr = LS.get("prog:" + id, { c: 0, s: 0 });
+  ch = Math.min(pr.c, book.chapters.length - 1);
+  si = Math.min(pr.s, book.chapters[ch].sentences.length - 1);
+
+  const sel = $("chapterSel"); sel.innerHTML = "";
+  book.chapters.forEach((c, i) => {
+    const o = document.createElement("option"); o.value = i; o.textContent = c.title; sel.appendChild(o);
+  });
+  $("library").classList.add("hidden"); $("reader").classList.remove("hidden");
+  renderChapter(); highlight(true);
+}
+
+function renderChapter(){
+  const inner = $("inner"); inner.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  let p = null, lastP = -1;
+  book.chapters[ch].sentences.forEach((s, i) => {
+    if (s.p !== lastP){ p = document.createElement("p"); frag.appendChild(p); lastP = s.p; }
+    const span = document.createElement("span");
+    span.className = "s"; span.dataset.i = i; span.textContent = s.t + " ";
+    p.appendChild(span);
+  });
+  inner.appendChild(frag);
+  $("chapterSel").value = ch;
+  $("text").scrollTop = 0;
+}
+
+function highlight(scroll){
+  const old = $("inner").querySelector(".s.on"); if (old) old.classList.remove("on");
+  const el = $("inner").querySelector(`.s[data-i="${si}"]`);
+  if (el){
+    el.classList.add("on");
+    if (scroll){
+      const box = $("text").getBoundingClientRect(), r = el.getBoundingClientRect();
+      if (r.top < box.top + 40 || r.bottom > box.bottom - 150)
+        $("text").scrollTop += r.top - box.top - box.height * 0.3;
+    }
+  }
+  const g = offsets[ch] + si;
+  $("pct").textContent = `Capítulo ${ch + 1} de ${book.chapters.length} · ${Math.round(100 * g / meta.total)}%`;
+  LS.set("prog:" + meta.id, { c: ch, s: si, g });
+}
+
+$("inner").onclick = e => {
+  const el = e.target.closest(".s"); if (!el) return;
+  si = +el.dataset.i; highlight(false);
+  if (playing) speakCurrent();
+};
+$("chapterSel").onchange = e => {
+  ch = +e.target.value; si = 0; renderChapter(); highlight(true);
+  if (playing) speakCurrent();
+};
+$("backBtn").onclick = () => {
+  pause(); book = null;
+  $("reader").classList.add("hidden"); $("library").classList.remove("hidden"); renderLibrary();
+};
+
+/* ================= Voz ================= */
+const synth = window.speechSynthesis;
+let settings = Object.assign({ voice: "", rate: 1, font: 19, all: false }, LS.get("settings", {}));
+let voices = [], playing = false, current = null, wakeLock = null;
+
+function voiceScore(v){
+  const n = v.name.toLowerCase();
+  let s = 0;
+  if (/premium/.test(n)) s += 3;
+  if (/mejorad|enhanced/.test(n)) s += 2;
+  if (/es-mx|es-us|es-419/i.test(v.lang)) s += 1;
+  return s;
+}
+function loadVoices(){
+  voices = synth.getVoices();
+  const list = voices
+    .filter(v => settings.all || v.lang.toLowerCase().startsWith("es"))
+    .sort((a, b) => voiceScore(b) - voiceScore(a) || a.name.localeCompare(b.name));
+  const sel = $("voiceSel"); sel.innerHTML = "";
+  for (const v of list){
+    const o = document.createElement("option");
+    o.value = v.voiceURI; o.textContent = `${v.name} (${v.lang})`; sel.appendChild(o);
+  }
+  if (!list.length){ sel.innerHTML = "<option>Cargando voces…</option>"; return; }
+  if (!list.some(v => v.voiceURI === settings.voice)) settings.voice = list[0].voiceURI;
+  sel.value = settings.voice;
+}
+loadVoices();
+if (synth.addEventListener) synth.addEventListener("voiceschanged", loadVoices);
+else synth.onvoiceschanged = loadVoices;
+setTimeout(loadVoices, 800);
+
+function currentVoice(){ return voices.find(v => v.voiceURI === settings.voice) || null; }
+
+function speakCurrent(){
+  current = null; synth.cancel();
+  const s = book && book.chapters[ch].sentences[si];
+  if (!s){ pause(); return; }
+  const u = new SpeechSynthesisUtterance(s.t);
+  const v = currentVoice();
+  if (v){ u.voice = v; u.lang = v.lang; } else u.lang = "es-MX";
+  u.rate = settings.rate;
+  u.onend = () => { if (u === current && playing) advance(); };
+  u.onerror = e => {
+    if (u !== current || !playing) return;
+    if (e.error === "interrupted" || e.error === "canceled") return;
+    advance();
+  };
+  current = u;
+  synth.speak(u);
+  highlight(true);
+}
+
+function advance(){
+  si++;
+  if (si >= book.chapters[ch].sentences.length){
+    if (ch + 1 >= book.chapters.length){ si--; pause(); highlight(false); return; }
+    ch++; si = 0; renderChapter();
+  }
+  speakCurrent();
+}
+
+async function keepAwake(){
+  try{ if ("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen");
+       if (wakeLock) wakeLock.addEventListener("release", () => { wakeLock = null; }); }catch{}
+}
+function play(){
+  playing = true; $("playBtn").textContent = "⏸"; $("playBtn").setAttribute("aria-label", "Pausa");
+  speakCurrent(); keepAwake();
+}
+function pause(){
+  playing = false; current = null; synth.cancel();
+  $("playBtn").textContent = "▶"; $("playBtn").setAttribute("aria-label", "Reproducir");
+  if (wakeLock){ wakeLock.release().catch(()=>{}); wakeLock = null; }
+}
+$("playBtn").onclick = () => playing ? pause() : play();
+$("prevBtn").onclick = () => {
+  if (si > 0) si--;
+  else if (ch > 0){ ch--; renderChapter(); si = book.chapters[ch].sentences.length - 1; }
+  highlight(true); if (playing) speakCurrent();
+};
+$("nextBtn").onclick = () => {
+  if (si < book.chapters[ch].sentences.length - 1) si++;
+  else if (ch < book.chapters.length - 1){ ch++; si = 0; renderChapter(); }
+  highlight(true); if (playing) speakCurrent();
+};
+
+// Al volver a la app (p. ej. tras bloquear la pantalla) retoma la lectura
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && playing){
+    keepAwake();
+    if (!synth.speaking) speakCurrent();
+  }
+});
+
+/* ================= Ajustes ================= */
+function applySettings(){
+  document.documentElement.style.setProperty("--font", settings.font + "px");
+  $("rate").value = settings.rate; $("rateVal").textContent = (+settings.rate).toFixed(2) + "×";
+  $("font").value = settings.font; $("fontVal").textContent = settings.font + " px";
+  $("allVoices").checked = settings.all;
+  LS.set("settings", settings);
+}
+applySettings();
+$("setBtn").onclick = () => { loadVoices(); $("settings").classList.remove("hidden"); };
+$("closeSet").onclick = () => $("settings").classList.add("hidden");
+$("voiceSel").onchange = e => { settings.voice = e.target.value; applySettings(); if (playing) speakCurrent(); };
+$("allVoices").onchange = e => { settings.all = e.target.checked; applySettings(); loadVoices(); };
+$("rate").oninput = e => { settings.rate = +e.target.value; applySettings(); };
+$("rate").onchange = () => { if (playing) speakCurrent(); };
+$("font").oninput = e => { settings.font = +e.target.value; applySettings(); };
+
+renderLibrary();
+</script>
+</body>
+</html>
